@@ -46,11 +46,11 @@ class MetasploitModule < Msf::Auxiliary #crea una nuova classe che eredita da au
     success = $?.exitstatus == 0 #0 = successo altrimenti fail
 
     #estrae la latenza dall'output con tre espressioni diverse per compatibilità
-    latency  = output.match(/[Tt]ime[=<]([\d.]+)\s*ms/)&.captures&.first #linux
+    latency ||= output.match(/[Tt]ime[=<]([\d.]+)\s*ms/)&.captures&.first #linux
     latency ||= output.match(/Average\s*=\s*([\d.]+)\s*ms/)&.captures&.first  #windows
     latency ||= output.match(/min\/avg\/max[^=]+=\s*[\d.]+\/([\d.]+)/)&.captures&.first #macos
 
-    { reachable: success, latency: latency, raw: output } # restituisce i risultati
+    { reachable: success, latency: latency, raw: output } #restituisce i risultati
   end
 
   def run_host(ip) #metodo chiamato automaticamente dallo scanner per ogni ip
@@ -58,28 +58,32 @@ class MetasploitModule < Msf::Auxiliary #crea una nuova classe che eredita da au
 
     if result[:reachable] #se il ping ha avuto successo
       latency_str = result[:latency] ? " (#{result[:latency]}ms)" : ""
-      print_good("#{ip} Risponde#{latency_str}") 
+      print_good("#{ip} Risponde #{latency_str}") 
 
       #salva l'host come raggiungibile nel database di metasploit
       report_host(
         host:  ip,
         state: Msf::HostState::Alive,
-        info:  "Risposta ICMP#{latency_str}"
+        info:  "risposta ICMP #{latency_str}",
+        comments: 'raggiungibile'
       )
 
-      #salva la latenza come nota nel database
+      #salva ip e latenza nelle note del database
       report_note(
         host: ip,
         type: 'host.ping',
         data: { latency_ms: result[:latency], reachable: true }
       )
+
     else #se il ping non ha avuto successo
       print_status("#{ip} è down o blocca comunicazioni ICMP") 
 
       #salva l'host come sconosciuto nel database
       report_host(
         host:  ip,
-        state: Msf::HostState::Unknown
+        state: Msf::HostState::Unknown,
+        comments: 'non raggiungibile o non risponde'
+
       )
     end
   end
