@@ -34,6 +34,13 @@ class MetasploitModule < Msf::Auxiliary #crea una nuova classe che eredita da au
       return {reachable: false, latency: nil}
     end
 
+    #oppure usando un comando
+    #def resolver_dominio(ip)
+      #output = `nslookup #{ip} 2>&1`
+      #ip = output.match(/Address:\s*([\d.]+)/)&.captures&.last
+      #ip
+    #end
+
     #costruisce il comando ping in base al sistema operativo
     cmd = if RUBY_PLATFORM =~ /mingw|mswin/ # controlla se è windows ed esegue il comando
             "ping -n #{count} -w #{timeout * 1000} #{ip}"
