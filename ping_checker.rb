@@ -13,26 +13,25 @@ class MetasploitModule < Msf::Auxiliary #crea una nuova classe che eredita da au
     ))
 
     register_options([ #opzioni che l'utente può impostare con il set
-      OptInt.new('COUNT',   [false, 'Numero di pacchetti da inviare', 2]),
-      OptInt.new('TIMEOUT', [false, 'Timeout in secondi', 3])
+      OptInt.new('COUNT',   [false, 'Numero di pacchetti da inviare', 3]),
+      OptInt.new('TIMEOUT', [false, 'Timeout in secondi', 1])
+      #OptInt.new('TIME', [false, 'Numero di salti prima di abortire', 10]) -t
     ])
   end
 
   def ping_host(ip) #metodo che esegue il ping sull'ip ricevuto
     count   = datastore['COUNT']   #legge il valore impostato 
     timeout = datastore['TIMEOUT'] 
+    #time = datastore['TIME']
 
     #posso immettere anche un dominio al posto dell'ip
     require 'resolv'
     begin
       resolved_ip = Resolv.getaddress(ip) #converte il dominio in ip
-      if resolved_ip != ip
-        print_status("#{ip} risolto in #{resolved_ip}")
-      end
       ip = resolved_ip
+
     rescue Resolv::ResolvError #se il dominio non esiste
-      print_error("Impossibile trovare il dominio: #{ip}")
-      return { reachable: false, latency: nil, raw: '' }
+      return {reachable: false, latency: nil, raw: ''}
     end
 
     #costruisce il comando ping in base al sistema operativo
@@ -45,20 +44,31 @@ class MetasploitModule < Msf::Auxiliary #crea una nuova classe che eredita da au
     output  = `#{cmd} 2>&1` #eseguito il comando e cattura l'output
     success = $?.exitstatus == 0 #0 = successo altrimenti fail
 
-    #estrae la latenza dall'output con tre espressioni diverse per compatibilità
-    latency ||= output.match(/[Tt]ime[=<]([\d.]+)\s*ms/)&.captures&.first #linux
-    latency ||= output.match(/Average\s*=\s*([\d.]+)\s*ms/)&.captures&.first  #windows
-    latency ||= output.match(/min\/avg\/max[^=]+=\s*[\d.]+\/([\d.]+)/)&.captures&.first #macos
 
-    { reachable: success, latency: latency, raw: output } #restituisce i risultati
+    #estrae solo la latenza e count dall'output con tre espressioni diverse per compatibilità
+    latency ||= output.match(/[Tt]ime[=<]([\d.]+)\s*ms/)&.captures&.first #linux/macos
+    #count ||= output.match(/(\d+)\s+packets transmitted/)&.captures&.first
+    latency ||= output.match(/Average\s*=\s*([\d.]+)\s*ms/)&.captures&.first #windows
+    #count ||= output.match(/Packets:\s+Sent\s*=\s*(\d+)/i)&.captures&.first
+    latency ||= output.match(/min\/avg\/max[^=]+=\s*[\d.]+\/([\d.]+)/)&.captures&.first #macos
+    #count ||= output.match(/(\d+)\s+packets transmitted/i)&.captures&.first
+
+    {reachable: success, latency: latency} #restituisce i risultati
+    #{reachable: success, latency: latency, count:count , output: output} 
   end
 
   def run_host(ip) #metodo chiamato automaticamente dallo scanner per ogni ip
     result = ping_host(ip) #chiama il metodo ping_host
 
     if result[:reachable] #se il ping ha avuto successo
-      latency_str = result[:latency] ? " (#{result[:latency]}ms)" : ""
-      print_good("#{ip} Risponde #{latency_str}") 
+      latency_str = "(#{result[:latency]}ms)"
+      #count_str = "#{result[:count]}"
+      #print("Numero pacchetti inviati: #{count_str}\n")
+      #output_str = "#{result[:output]}" print("#{output_str}\n")
+      puts "\n"
+      print_good("#{ip} Risponde #{latency_str}\n")
+      
+
 
       #salva l'host come raggiungibile nel database di metasploit
       report_host(
@@ -72,11 +82,12 @@ class MetasploitModule < Msf::Auxiliary #crea una nuova classe che eredita da au
       report_note(
         host: ip,
         type: 'host.ping',
-        data: { latency_ms: result[:latency], reachable: true }
+        data: { latency_in_ms: result[:latency], reachable: true} #pacchetti_inviati: result[:count]
       )
 
     else #se il ping non ha avuto successo
-      print_status("#{ip} è down o blocca comunicazioni ICMP") 
+      puts "\n"
+      print_status("#{ip} è down o blocca comunicazioni ICMP\n") 
 
       #salva l'host come sconosciuto nel database
       report_host(
