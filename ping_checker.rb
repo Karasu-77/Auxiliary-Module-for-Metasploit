@@ -31,7 +31,7 @@ class MetasploitModule < Msf::Auxiliary #crea una nuova classe che eredita da au
       ip = resolved_ip
 
     rescue Resolv::ResolvError #se il dominio non esiste
-      return {reachable: false, latency: nil, raw: ''}
+      return {reachable: false, latency: nil}
     end
 
     #costruisce il comando ping in base al sistema operativo
