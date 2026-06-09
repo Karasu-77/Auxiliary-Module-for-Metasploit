@@ -1,107 +1,155 @@
-require 'msf/core' #libreria principale di Metasploit
+require 'msf/core' #standard library for the metasploit frameworks
+require 'socket' #library for creating and use a socket
+require 'resolv' #library for resolving domains into ip addresses 
 
-class MetasploitModule < Msf::Auxiliary #crea una nuova classe che eredita da auxiliary
-  include Msf::Auxiliary::Scanner #aggiunge supporto per rhosts, range e subnet
-  include Msf::Auxiliary::Report #aggiunge supporto per salvare nel database
+class MetasploitModule < Msf::Auxiliary
+  include Msf::Auxiliary::Scanner
+  include Msf::Auxiliary::Report
 
-  def initialize(info = {}) #metodo che viene eseguito al caricamento del modulo
+  def initialize(info = {})
     super(update_info(info,
       'Name'        => 'Ping checker',
-      'Description' => 'Verifica se un host è raggiungibile tramite ping',
-      'Author'      => ['pippo'],
+      'Description' => 'Verify if a host is reachable by ICMP request',
+      'Author'      => ['Karasu-77'],
       'License'     => MSF_LICENSE
     ))
 
-    register_options([ #opzioni che l'utente può impostare con il set
-      OptInt.new('COUNT',   [false, 'Numero di pacchetti da inviare', 3]),
-      OptInt.new('TIMEOUT', [false, 'Timeout in secondi', 1])
-      #OptInt.new('TIME', [false, 'Numero di salti prima di abortire', 10]) -t
+    register_options([
+      OptInt.new('COUNT', [false, 'Number of packets to send', 3]),
+      OptInt.new('TIMEOUT', [false, 'Timeout between each packet sent', 1]),
+      OptString.new('MESSAGE', [false, 'Message in the payload', 'hello'])
     ])
   end
 
-  def ping_host(ip) #metodo che esegue il ping sull'ip ricevuto
-    count   = datastore['COUNT']   #legge il valore impostato 
-    timeout = datastore['TIMEOUT'] 
-    #time = datastore['TIME']
+  #cheksum method used to verify the integrity of the packet
+  def check_sum(data)
+    data += "\x00" if data.length.odd?
+    sum = data.scan(/../).map { |b| b.unpack1('n') }.sum
+    sum = (sum >> 16) + (sum & 0xffff) while sum > 0xffff
+    ~sum & 0xffff
+  end
 
-    #posso immettere anche un dominio al posto dell'ip
-    require 'resolv'
+  #method to create our own packet for the ICMP request
+  def create_packet(ip, message)
+    type = 8 #echo request
+    code = 0
+    checksum = 0
+    id = Process.pid & 0xffff
+    seq = 1
+    payload = message.encode('ASCII')
+
+    header = [type, code, checksum, id, seq].pack('C2n3')
+    checksum = check_sum(header + payload)
+
+    [type, code, checksum, id, seq].pack('C2n3') + payload
+  end
+
+  #creating the socket we need to send and recive the packet
+  def send_packet(ip, packet, timeout)
+    socket = Socket.new(Socket::AF_INET, Socket::SOCK_RAW, Socket::IPPROTO_ICMP)
+    #using timeout for each system
+    socket.setsockopt(Socket::SOL_SOCKET, Socket::SO_RCVTIMEO, [timeout, 0].pack('l_2'))
+    socket.send(packet, 0, Socket.pack_sockaddr_in(0, ip))
+    socket.recv(1024)  #to wait the ICMP answer 
+    socket.close
+  end
+
+  #method for creating a packet and sending it 
+  def ping_host(ip)
+    count = datastore['COUNT']
+    timeout = datastore['TIMEOUT']
+    message = datastore['MESSAGE']
+
+    #in the case it's needed to resolve a domain 
     begin
-      resolved_ip = Resolv.getaddress(ip) #converte il dominio in ip
-      ip = resolved_ip
-
-    rescue Resolv::ResolvError #se il dominio non esiste
+      ip = Resolv.getaddress(ip)
+    rescue Resolv::ResolvError
+      print_error("Impossible to find the domain: #{ip}")
       return {reachable: false, latency: nil}
     end
 
-    #oppure usando un comando
-    #def resolver_dominio(ip)
-      #output = `nslookup #{ip} 2>&1`
-      #ip = output.match(/Address:\s*([\d.]+)/)&.captures&.last
-      #ip
-    #end
+    #method to create each packet by using the method ceate_packet
+    packet = create_packet(ip, message)
+    print_status("Packet created for #{ip} with message: #{message}")
 
-    #costruisce il comando ping in base al sistema operativo
-    cmd = if RUBY_PLATFORM =~ /mingw|mswin/ # controlla se è windows ed esegue il comando
-            "ping -n #{count} -w #{timeout * 1000} #{ip}"
-          else
-            "ping -c #{count} -W #{timeout} #{ip}" #se non è windows esegue il comando per linux/macos
-          end
+    #varibales and array
+    latencies = [] 
+    recived = 0
+    success = false
 
-    output  = `#{cmd} 2>&1` #eseguito il comando e cattura l'output
-    success = $?.exitstatus == 0 #0 = successo altrimenti fail
+    count.times do |i|
+      begin
+        the_start = Time.now 
+        send_packet(ip, packet, timeout)  #waiting for the answer 
+        the_end = Time.now
 
+        latency = ((the_end - the_start) * 1000).round(2)
+        latencies  << latency
+        recived += 1
+        success = true
+        print_status("Packet #{i+1}/#{count} -> #{ip} (#{latency}ms)")
+      rescue => e
+        print_error("Packet #{i+1} lost: #{e.message}")
+      end
+      sleep timeout
+    end
+   
+    #if something goes wrong
+    if latencies.empty?
+      return {reachable: false, latency: nil, min: nil, max: nil, loss: 100.0, jitter: nil}
+    end
 
-    #estrae solo la latenza e count dall'output con tre espressioni diverse per compatibilità
-    latency ||= output.match(/[Tt]ime[=<]([\d.]+)\s*ms/)&.captures&.first #linux/macos
-    #count ||= output.match(/(\d+)\s+packets transmitted/)&.captures&.first
-    latency ||= output.match(/Average\s*=\s*([\d.]+)\s*ms/)&.captures&.first #windows
-    #count ||= output.match(/Packets:\s+Sent\s*=\s*(\d+)/i)&.captures&.first
-    latency ||= output.match(/min\/avg\/max[^=]+=\s*[\d.]+\/([\d.]+)/)&.captures&.first #macos
-    #count ||= output.match(/(\d+)\s+packets transmitted/i)&.captures&.first
+    min = latencies.min
+    max = latencies.max
+    avg = (latencies.sum / latencies.size).round(2)
+    loss = (((count - recived).to_f / count) * 100).round(1)
+    jitter = if latencies.size > 1
+               diffs = latencies.each_cons(2).map {|a, b| (b - a).abs }
+               (diffs.sum / diffs.size).round(2)
+             else
+               0.0
+             end
 
-    {reachable: success, latency: latency} #restituisce i risultati
-    #{reachable: success, latency: latency, count:count , output: output} 
+    return {reachable: success, latency: avg, min: min, max: max, loss: loss, jitter: jitter}
   end
 
-  def run_host(ip) #metodo chiamato automaticamente dallo scanner per ogni ip
-    result = ping_host(ip) #chiama il metodo ping_host
+  def run_host(ip)
+    result = ping_host(ip)
 
-    if result[:reachable] #se il ping ha avuto successo
-      latency_str = "(#{result[:latency]}ms)"
-      #count_str = "#{result[:count]}"
-      #print("Numero pacchetti inviati: #{count_str}\n")
-      #output_str = "#{result[:output]}" print("#{output_str}\n")
+    if result[:reachable] #if the host is alive
       puts "\n"
-      print_good("#{ip} Risponde #{latency_str}\n")
-      
+      print_good("#{ip} is up!")
+      puts "\n"
+      print_status("Latency = min: #{result[:min]}ms  average: #{result[:latency]}ms  max: #{result[:max]}ms\n")
+      print_status("Jitter = #{result[:jitter]}ms\n")
+      print_status("Packet loss = #{result[:loss]}%\n")
 
-
-      #salva l'host come raggiungibile nel database di metasploit
+      #reporting everything on the database
       report_host(
-        host:  ip,
+        host: ip,
         state: Msf::HostState::Alive,
-        info:  "risposta ICMP #{latency_str}",
-        comments: 'raggiungibile'
+        info: "ICMP min:#{result[:min]}ms avg:#{result[:latency]}ms max:#{result[:max]}ms loss:#{result[:loss]}%",
+        comments: 'reachable'
       )
 
-      #salva ip e latenza nelle note del database
       report_note(
         host: ip,
         type: 'host.ping',
-        data: { latency_in_ms: result[:latency], reachable: true} #pacchetti_inviati: result[:count]
+        data: { #hashing all the infos
+          latency_min: result[:min],
+          latency_avg: result[:latency],
+          latency_max: result[:max],
+          jitter:      result[:jitter],
+          packet_loss: result[:loss]
+        }
       )
+    else #when the host is down or blocked
+      print_error("#{ip}, the host is down or blocking ICMP requests.\n")
 
-    else #se il ping non ha avuto successo
-      puts "\n"
-      print_status("#{ip} è down o blocca comunicazioni ICMP\n") 
-
-      #salva l'host come sconosciuto nel database
       report_host(
-        host:  ip,
+        host: ip,
         state: Msf::HostState::Unknown,
-        comments: 'non raggiungibile o non risponde'
-
+        comments: 'unreachable or blocked'
       )
     end
   end
