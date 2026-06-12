@@ -118,7 +118,7 @@ class MetasploitModule < Msf::Auxiliary
 
     if result[:reachable] #if the host is alive
       puts "\n"
-      print_good("#{ip} is up!")
+      print_good("#{ip} is alive!")
       puts "\n"
       print_status("Latency = min: #{result[:min]}ms  average: #{result[:latency]}ms  max: #{result[:max]}ms\n")
       print_status("Jitter = #{result[:jitter]}ms\n")
