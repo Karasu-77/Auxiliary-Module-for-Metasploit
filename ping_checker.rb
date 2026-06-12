@@ -16,7 +16,7 @@ class MetasploitModule < Msf::Auxiliary
 
     register_options([
       OptInt.new('COUNT', [false, 'Number of packets to send', 3]),
-      OptInt.new('TIMEOUT', [false, 'Timeout between each packet sent', 1]),
+      OptInt.new('TIMEOUT', [false, 'Timeout between each packet sent', 2]),
       OptString.new('MESSAGE', [false, 'Message in the payload', 'hello'])
     ])
   end
@@ -44,14 +44,16 @@ class MetasploitModule < Msf::Auxiliary
     [type, code, checksum, id, seq].pack('C2n3') + payload
   end
 
-  #creating the socket we need to send and recive the packet
+  #creating the socket we need to send and receive the packet
   def send_packet(ip, packet, timeout)
     socket = Socket.new(Socket::AF_INET, Socket::SOCK_RAW, Socket::IPPROTO_ICMP)
     #using timeout for each system
     socket.setsockopt(Socket::SOL_SOCKET, Socket::SO_RCVTIMEO, [timeout, 0].pack('l_2'))
     socket.send(packet, 0, Socket.pack_sockaddr_in(0, ip))
-    socket.recv(1024)  #to wait the ICMP answer 
+    reply = socket.recv(1024)  #saving the reply
     socket.close
+    ttl = reply.bytes[8] #taking the TTL from the IP header
+    ttl
   end
 
   #method for creating a packet and sending it 
@@ -70,17 +72,18 @@ class MetasploitModule < Msf::Auxiliary
 
     #method to create each packet by using the method create_packet
     packet = create_packet(ip, message)
-    print_status("Packet created for #{ip} with message: #{message}")
+    print_status("Packet created for #{ip} with message: #{message}\n")
 
     #varibales and array
-    latencies = [] 
+    latencies = []
     received = 0
     success = false
+    ttl = nil
 
     count.times do |i|
       begin
         the_start = Time.now 
-        send_packet(ip, packet, timeout)  #waiting for the answer 
+        ttl = send_packet(ip, packet, timeout)  #waiting for the answer 
         the_end = Time.now
 
         latency = ((the_end - the_start) * 1000).round(2)
@@ -96,13 +99,13 @@ class MetasploitModule < Msf::Auxiliary
    
     #if something goes wrong
     if latencies.empty?
-      {reachable: false, latency: nil, min: nil, max: nil, loss: 100.0, jitter: nil}
+      {reachable: false, latency: nil, min: nil, max: nil, loss: 100.0, jitter: nil, ttl: nil}
     end
 
     min = latencies.min
     max = latencies.max
     avg = (latencies.sum / latencies.size).round(2)
-    loss = (((count - recived).to_f / count) * 100).round(1)
+    loss = (((count - received).to_f / count) * 100).round(1)
     jitter = if latencies.size > 1
                diffs = latencies.each_cons(2).map {|a, b| (b - a).abs }
                (diffs.sum / diffs.size).round(2)
@@ -110,8 +113,9 @@ class MetasploitModule < Msf::Auxiliary
                0.0
              end
 
-    {reachable: success, latency: avg, min: min, max: max, loss: loss, jitter: jitter}
+    {reachable: success, latency: avg, min: min, max: max, loss: loss, jitter: jitter, ttl: ttl}
   end
+
 
   def run_host(ip)
     result = ping_host(ip)
@@ -123,12 +127,13 @@ class MetasploitModule < Msf::Auxiliary
       print_status("Latency = min: #{result[:min]}ms  average: #{result[:latency]}ms  max: #{result[:max]}ms\n")
       print_status("Jitter = #{result[:jitter]}ms\n")
       print_status("Packet loss = #{result[:loss]}%\n")
+      print_status("TTL = #{result[:ttl]}\n")
 
       #reporting everything on the database
       report_host(
         host: ip,
         state: Msf::HostState::Alive,
-        info: "ICMP min:#{result[:min]}ms avg:#{result[:latency]}ms max:#{result[:max]}ms loss:#{result[:loss]}%",
+        info: "ICMP min:#{result[:min]}ms avg:#{result[:latency]}ms max:#{result[:max]}ms loss:#{result[:loss]}% TTL: #{result[:ttl]}",
         comments: 'reachable'
       )
 
@@ -140,7 +145,8 @@ class MetasploitModule < Msf::Auxiliary
           latency_avg: result[:latency],
           latency_max: result[:max],
           jitter:      result[:jitter],
-          packet_loss: result[:loss]
+          packet_loss: result[:loss],
+          tll: result[:ttl]
         }
       )
     else #when the host is down or blocked
