@@ -47,7 +47,7 @@ class MetasploitModule < Msf::Auxiliary
   #creating the socket we need to send and receive the packet
   def send_packet(ip, packet, timeout)
     socket = Socket.new(Socket::AF_INET, Socket::SOCK_RAW, Socket::IPPROTO_ICMP)
-    #using timeout for each system
+    socket.setsockopt(Socket::IPPROTO_IP, Socket::IP_TTL, 255) #setting the outgoing ttl
     socket.setsockopt(Socket::SOL_SOCKET, Socket::SO_RCVTIMEO, [timeout, 0].pack('l_2'))
     socket.send(packet, 0, Socket.pack_sockaddr_in(0, ip))
     reply = socket.recv(1024)  #saving the reply
