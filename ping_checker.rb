@@ -65,16 +65,16 @@ class MetasploitModule < Msf::Auxiliary
       ip = Resolv.getaddress(ip)
     rescue Resolv::ResolvError
       print_error("Impossible to find the domain: #{ip}")
-      return {reachable: false, latency: nil}
+      {reachable: false, latency: nil}
     end
 
-    #method to create each packet by using the method ceate_packet
+    #method to create each packet by using the method create_packet
     packet = create_packet(ip, message)
     print_status("Packet created for #{ip} with message: #{message}")
 
     #varibales and array
     latencies = [] 
-    recived = 0
+    received = 0
     success = false
 
     count.times do |i|
@@ -85,7 +85,7 @@ class MetasploitModule < Msf::Auxiliary
 
         latency = ((the_end - the_start) * 1000).round(2)
         latencies  << latency
-        recived += 1
+        received += 1
         success = true
         print_status("Packet #{i+1}/#{count} -> #{ip} (#{latency}ms)")
       rescue => e
@@ -96,7 +96,7 @@ class MetasploitModule < Msf::Auxiliary
    
     #if something goes wrong
     if latencies.empty?
-      return {reachable: false, latency: nil, min: nil, max: nil, loss: 100.0, jitter: nil}
+      {reachable: false, latency: nil, min: nil, max: nil, loss: 100.0, jitter: nil}
     end
 
     min = latencies.min
@@ -110,7 +110,7 @@ class MetasploitModule < Msf::Auxiliary
                0.0
              end
 
-    return {reachable: success, latency: avg, min: min, max: max, loss: loss, jitter: jitter}
+    {reachable: success, latency: avg, min: min, max: max, loss: loss, jitter: jitter}
   end
 
   def run_host(ip)
