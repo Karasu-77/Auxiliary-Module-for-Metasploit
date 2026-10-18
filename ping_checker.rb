@@ -70,14 +70,6 @@ class MetasploitModule < Msf::Auxiliary
       {reachable: false, latency: nil}
     end
 
-  
-    #def risolver_dominio(ip) #stessa cosa ma con un comando
-      #output = `nslookup #{ip} 2>&1`
-      #ip = output.match(/Address:\s*([\d.]+)/)&.captures&.last
-      #ip
-    #end 
-  
-
     #method to create each packet by using the method create_packet
     packet = create_packet(ip, message)
     print_status("Packet created for #{ip} with message: #{message}\n")
