@@ -30,7 +30,7 @@ class MetasploitModule < Msf::Auxiliary
   end
 
   #method to create our own packet for the ICMP request
-  def create_packet(ip, message)
+  def create_packet(message)
     type = 8 #echo request
     code = 0
     checksum = 0
@@ -50,10 +50,10 @@ class MetasploitModule < Msf::Auxiliary
     socket.setsockopt(Socket::IPPROTO_IP, Socket::IP_TTL, 255) #setting the outgoing ttl
     socket.setsockopt(Socket::SOL_SOCKET, Socket::SO_RCVTIMEO, [timeout, 0].pack('l_2'))
     socket.send(packet, 0, Socket.pack_sockaddr_in(0, ip))
-    reply = socket.recv(1024)  #saving the reply
+    reply = socket.recv(1024)
     socket.close
-    ttl = reply.bytes[8] #taking the TTL from the IP header
-    ttl
+    reply_message = reply[28..-1].force_encoding('ASCII').strip rescue nil
+    {reply_message: reply_message}
   end
 
   #method for creating a packet and sending it 
@@ -71,26 +71,28 @@ class MetasploitModule < Msf::Auxiliary
     end
 
     #method to create each packet by using the method create_packet
-    packet = create_packet(ip, message)
+    packet = create_packet(message)
     print_status("Packet created for #{ip} with message: #{message}\n")
 
     #varibales and array
     latencies = []
     received = 0
     success = false
-    ttl = nil
+    reply_messages = []
 
     count.times do |i|
       begin
         the_start = Time.now 
-        ttl = send_packet(ip, packet, timeout)  #waiting for the answer 
+        result = send_packet(ip, packet, timeout)  #waiting for the answer 
         the_end = Time.now
 
+        replymsg = result[:reply_message]
+        reply_messages << replymsg
         latency = ((the_end - the_start) * 1000).round(2)
         latencies  << latency
         received += 1
         success = true
-        print_status("Packet #{i+1}/#{count} -> #{ip} (#{latency}ms)")
+        print_status("Packet #{i+1}/#{count} -> #{ip} (#{latency}ms) reply: #{replymsg}")
       rescue => e
         print_error("Packet #{i+1} lost: #{e.message}")
       end
@@ -99,7 +101,7 @@ class MetasploitModule < Msf::Auxiliary
    
     #if something goes wrong
     if latencies.empty?
-      {reachable: false, latency: nil, min: nil, max: nil, loss: 100.0, jitter: nil, ttl: nil}
+      {reachable: false, latency: nil, min: nil, max: nil, loss: 100.0, jitter: nil}
     end
 
     min = latencies.min
@@ -113,7 +115,7 @@ class MetasploitModule < Msf::Auxiliary
                0.0
              end
 
-    {reachable: success, latency: avg, min: min, max: max, loss: loss, jitter: jitter, ttl: ttl}
+    {reachable: success, latency: avg, min: min, max: max, loss: loss, jitter: jitter, reply_messages: reply_messages}
   end
 
 
@@ -127,13 +129,12 @@ class MetasploitModule < Msf::Auxiliary
       print_status("Latency = min: #{result[:min]}ms  average: #{result[:latency]}ms  max: #{result[:max]}ms\n")
       print_status("Jitter = #{result[:jitter]}ms\n")
       print_status("Packet loss = #{result[:loss]}%\n")
-      print_status("TTL = #{result[:ttl]}\n")
 
       #reporting everything on the database
       report_host(
         host: ip,
         state: Msf::HostState::Alive,
-        info: "ICMP min:#{result[:min]}ms avg:#{result[:latency]}ms max:#{result[:max]}ms loss:#{result[:loss]}% TTL: #{result[:ttl]}",
+        info: "ICMP min:#{result[:min]}ms avg:#{result[:latency]}ms max:#{result[:max]}ms loss:#{result[:loss]}% replies: #{result[:reply_messages]}",
         comments: 'reachable'
       )
 
@@ -144,9 +145,10 @@ class MetasploitModule < Msf::Auxiliary
           latency_min: result[:min],
           latency_avg: result[:latency],
           latency_max: result[:max],
-          jitter:      result[:jitter],
+          jitter: result[:jitter],
           packet_loss: result[:loss],
-          tll: result[:ttl]
+          message_sent: datastore['MESSAGE'],
+          replies: result[:reply_messages]
         }
       )
     else #when the host is down or blocked
